@@ -22,6 +22,8 @@ let workerKillTimeout = null;
 
 let editor = null;
 
+let sources = Object.create(null);
+
 function executeCode() {
     let source = editor.getValue();
     if (workerIsRunning || source === workerLastSource) {
@@ -40,11 +42,9 @@ function executeCode() {
         };
     }
 
-    let select = document.getElementById("branch");
-    let branch = self.branches.find(el => el.branch === select.value);
-    let wasm_url = branch.url;
+    sources['/input.mjs'] = source;
 
-    worker.postMessage({source, wasm_url});
+    worker.postMessage({ source: sources, wasm_url: '../js.wasm' });
     workerLastSource = source;
     workerIsRunning = true;
 
@@ -67,65 +67,59 @@ function shareCode() {
     navigator.clipboard.writeText(url);
 }
 
-function showBuildInfo(name) {
-    let build = self.branches.find(el => el.branch === name);
-    let info = document.getElementById("build_info");
-    info.innerText = `build: ${build.buildid} (rev ${build.rev.substr(0, 6)})`;
-}
+const initSource = `
+// Match JS floating point number
 
-function changeBranch() {
-    showBuildInfo(this.value);
-    if (worker) {
-        worker.terminate();
+import cre from 'con-reg-exp';
+
+// Convenient Regular Expression
+
+const number = cre.global\`
+    optional [+-];                    // Sign
+    {
+        at-least-1 digit;             // Integral part
+        optional (".", repeat digit); // Optional factional part
+    } or {
+        ".";
+        at-least-1 digit;             // Variant with only fractional part
     }
-    workerIsRunning = false;
-    worker = null;
-    workerLastSource = null;
-    executeCode();
-}
+    optional {                        // Optional exponent part
+        [eE];
+        optional [+-];
+        at-least-1 digit;
+    }
+\`;
 
-const initSource = `// Welcome to the SpiderMonkey JS shell compiled to WebAssembly!
-//
-// JS code on this side is evaluated in a Web Worker as you type.
-// The output is printed on the right-hand side.
-//
-// The JS shell has various builtin functions for testing purposes.
-// help() will print a list of them.
+// Usage
 
-print("Hello, world!");
-print("=".repeat(13));
+console.log('Compiled: const number =', number.toString());
 
-let re = /(?<wday>\\w{3}) (?<month>\\w{3}) (?<day>\\d+)/;
-let groups = re.exec(new Date()).groups;
-print(\`Today is \${groups.wday}, \${groups.month} \${groups.day}.\`);
+let sampleText = \`
+    This is number: 7
+    Scientific notation: 0.3e+10
+    Some other examples: -.2, +0e0
+    Those are not numbers, but numeric part will be extracted: 1e, x10, 10.10.10.10
+\`;
 
-print();
-print("2 ** 128 =", 2n ** 128n);
+console.log(sampleText.match(number));
 `;
 
 self.onload = async function() {
-    let response = await fetch("data.json");
-    let branches = await response.json();
-    let select = document.getElementById("branch");
-    for (let branch of branches) {
-        var option = document.createElement("option");
-        option.value = branch.branch;
-        option.text = branch.branch;
-        select.appendChild(option);
-    }
 
-    self.branches = branches;
+    let creSource = await (await fetch("con-reg-exp.mjs")).text();
 
-    let params = new URLSearchParams(window.location.search);
-    let source = params.has("source") ? decodeURIComponent(params.get("source")) : initSource;
-
-    if (params.has("branch")) {
-        let branch = params.get("branch");
-        select.value = branch;
-    }
+    sources['/input.mjs'] = initSource;
+    sources['/console-stub.mjs'] = await (await fetch("console-stub.mjs")).text();
+    sources['/input.js'] = `
+        mainMod = parseModule('globalThis.console=(await import("/console-stub.mjs")).console;try{await import("/input.mjs");}catch(err){if(err instanceof SyntaxError)throw err;printErr(err.toString());printErr("stack:");printErr("    " + err.stack.replace(/(\\\\r?\\\\n)/g, "$1    "));}');
+        creMod = parseModule(${JSON.stringify(creSource)});
+        registerModule('con-reg-exp', creMod);
+        moduleLink(mainMod);
+        moduleEvaluate(mainMod);
+    `,
 
     editor = monaco.editor.create(document.getElementById("editor"), {
-        value: source,
+        value: initSource,
         language: "javascript",
         minimap: {
             enabled: false
@@ -146,9 +140,6 @@ self.onload = async function() {
         executeCode();
     });
     executeCode();
-
-    showBuildInfo(select.value);
-    select.onchange = changeBranch;
 
     document.getElementById("share").onclick = shareCode;
 };

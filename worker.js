@@ -34,7 +34,9 @@ async function run(source, wasm_url) {
 
     let instance = await WebAssembly.instantiate(wasmModule, wasi.getImports(wasmModule));
 
-    wasmFs.fs.writeFileSync('/input.js', source);
+    for (let [name, cnt] of Object.entries(source)) {
+        wasmFs.fs.writeFileSync(name, cnt);
+    }
 
     wasmFs.volume.fds[1].position = 0;
     wasmFs.volume.fds[2].position = 0;

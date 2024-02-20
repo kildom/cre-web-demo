@@ -32,6 +32,8 @@ module.exports = {
       patterns: [
         { from: "./index.html", to: __dirname + "/dist" },
         { from: "./data.json", to: __dirname + "/dist" },
+        { from: "./node_modules/con-reg-exp/dist/esm/con-reg-exp.mjs", to: __dirname + "/dist" },
+        { from: "./scripts/console-stub.mjs", to: __dirname + "/dist" },
       ],
     }),
   ],
