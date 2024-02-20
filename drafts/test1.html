@@ -1,0 +1,115 @@
+<html>
+    <body>
+        <script type="module">
+
+let worker = new Worker('worker.mjs', {type: "module"});
+
+function reportUnsupported()
+{
+    console.log('reportUnsupported');
+}
+
+function consoleMessage({ level, args }) {
+    if (args.length > 0 && typeof(args[0]) === 'string' && /%[oOdisfc]/.test(args[0])) {
+        level = 'unsupported';
+        args = [];
+    }
+    if (level === 'unsupported') {
+        reportUnsupported();
+        return;
+    }
+    console.log('-------', level, args);
+}
+
+worker.onmessage = function(event) {
+    if (event.target !== worker) return;
+    console.debug(event.data.type);
+    console.log(event);
+    switch (event.data.type) {
+        case 'console': return consoleMessage(event.data);
+        case 'running': {
+            clearTimeout(runningTimeout);
+            runningTimeout = setTimeout(() => {
+                runningTimeout = null;
+                // report timeout
+                console.error('Timeout occurred while running your code. Check for infinite loops.');
+                worker.terminate();
+                worker = new Worker('worker.mjs', {type: "module"});
+            }, 5000);
+            break;
+        }
+        case 'done': {
+            clearTimeout(runningTimeout);
+            runningTimeout = null;
+            if (event.data.error) {
+                console.error(event.data.error);
+            }
+            break;
+        }
+    }
+}
+
+let runningTimeout = null;
+
+function run(code) {
+    if (runningTimeout !== null) return;
+    worker.postMessage({type: 'run', code: code});
+    runningTimeout = setTimeout(() => {
+        runningTimeout = null;
+        // report timeout with potentially syntax error
+        console.error('Timeout occurred while initializing your code. Check for syntax errors.');
+        worker.terminate();
+        worker = new Worker('worker.mjs', {type: "module"});
+    }, 500);
+}
+
+setTimeout(() => {
+    run(`
+
+    // Match JS floating point number
+
+    import cre from 'con-reg-exp';
+    
+    // Convenient Regular Expression
+    
+    const number = cre.global\`
+        optional [+-];                    // Sign
+        {
+            at-least-1 digit;             // Integral part
+            optional (".", repeat digit); // Optional factional part
+        } or {
+            ".";
+            at-least-1 digit;             // Variant with only fractional part
+        }
+        optional {                        // Optional exponent part
+            [eE];
+            optional [+-];
+            at-least-1 digit;
+        }
+    \`;
+    
+    // Usage
+    
+    console.log('Compiled: const number =', number.toString());
+    
+    let sampleText = \`
+        This is number: 7
+        Scientific notation: 0.3e+10
+        Some other examples: -.2, +0e0
+        Those are not numbers, but numeric part will be extracted: 1e, x10, 10.10.10.10
+    \`;
+    
+    console.log(sampleText.match(number));
+
+    await new Promise((resolve, reject) => {
+        setTimeout(resolve, 2000);
+    });
+
+    console.log('OK');
+
+    `);
+}, 500);
+
+        </script>
+    </body>
+</html>
