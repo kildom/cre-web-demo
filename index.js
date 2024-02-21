@@ -14,6 +14,8 @@ function setOutput(stderr, stdout) {
     document.getElementById("output").textContent = stdout;
 }
 
+let extensions;
+
 let worker = null;
 let workerLastSource = null;
 
@@ -67,46 +69,15 @@ function shareCode() {
     navigator.clipboard.writeText(url);
 }
 
-const initSource = `
-// Match JS floating point number
-
-import cre from 'con-reg-exp';
-
-// Convenient Regular Expression
-
-const number = cre.global\`
-    optional [+-];                    // Sign
-    {
-        at-least-1 digit;             // Integral part
-        optional (".", repeat digit); // Optional factional part
-    } or {
-        ".";
-        at-least-1 digit;             // Variant with only fractional part
-    }
-    optional {                        // Optional exponent part
-        [eE];
-        optional [+-];
-        at-least-1 digit;
-    }
-\`;
-
-// Usage
-
-console.log('Compiled: const number =', number.toString());
-
-let sampleText = \`
-    This is number: 7
-    Scientific notation: 0.3e+10
-    Some other examples: -.2, +0e0
-    Those are not numbers, but numeric part will be extracted: 1e, x10, 10.10.10.10
-\`;
-
-console.log(sampleText.match(number));
-`;
 
 self.onload = async function() {
 
+    extensions = await eval("import('../extensions.js')");
+
+    extensions.setupEditor(monaco);
+
     let creSource = await (await fetch("con-reg-exp.mjs")).text();
+    let initSource = await (await fetch("test.mjs")).text();
 
     sources['/input.mjs'] = initSource;
     sources['/console-stub.mjs'] = await (await fetch("console-stub.mjs")).text();
@@ -128,6 +99,7 @@ self.onload = async function() {
         scrollbar: {vertical: "auto"},
         scrollBeyondLastLine: false,
         theme: "vs-dark",
+        "semanticHighlighting.enabled": true,
     });
 
     // Move cursor to end and focus the editor.
@@ -140,6 +112,4 @@ self.onload = async function() {
         executeCode();
     });
     executeCode();
-
-    document.getElementById("share").onclick = shareCode;
 };
