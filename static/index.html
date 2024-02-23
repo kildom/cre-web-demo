@@ -1,19 +1,114 @@
 <!doctype html>
 <html>
+
 <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <script src="index.js" type="text/javascript" charset="utf-8"></script>
     <link rel="stylesheet" href="./index.css" />
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap');
+
+        body {
+            padding: 0px;
+            margin: 0px;
+            font-family: 'Open Sans', sans-serif;
+            font-size: 16px;
+            min-height: 100vh;
+            background-color: #212124;
+            color: white;
+            overflow: hidden;
+        }
+
+        table {
+            font-family: 'Open Sans', sans-serif;
+            font-size: 100%;
+        }
+
+        .content {
+            display: flex;
+            flex-direction: column;
+            flex-wrap: nowrap;
+            height: 100vh;
+        }
+
+        .toolbar {
+            flex: 0 1 auto;
+            display: flex;
+            flex-direction: column;
+            flex-wrap: nowrap;
+        }
+
+        /* .bottons { nothing } */
+
+        .tabs {
+            overflow-x: auto;
+        }
+
+        .workspace {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            justify-content: flex-start;
+            align-content: stretch;
+            align-items: stretch;
+        }
+
+        .editorPanel {
+            flex: 3 1 400px;
+            display: flex;
+            flex-direction: row;
+            justify-content: flex-start;
+            align-content: stretch;
+            align-items: stretch;
+        }
+
+        .editor {
+            order: 0;
+            flex: 1 1 auto;
+            align-self: auto;
+            padding: 0px;
+            overflow: hidden;
+        }
+
+        .editorControl {
+            position: absolute;
+        }
+
+        .outputPanel {
+            flex: 2 1 200px;
+        }
+
+        .menu-label {
+            display: inline-block;
+            font-size: 80%;
+            white-space: nowrap;
+        }
+
+        .close-icon {
+            opacity: 40%;
+        }
+
+        .close-icon:hover {
+            opacity: unset;
+            color: red;
+        }
+
+        .file-name-input {
+            font-family: monospace;
+            font-size: 90% !important;
+            color: #8abbff !important;
+        }
     </style>
 </head>
 
 <body class="bp5-dark">
-    <div id="content">
-        <div id="reactRoot" style="height: 100vh; padding: 0px;">
-        </div>
-        <div id="editorPanel">
+    <div class="content">
+        <div class="toolbar" id="reactRoot"></div>
+        <div class="workspace">
+            <div class="editorPanel"></div>
+            <div class="outputPanel">aaaaaaa</div>
         </div>
     </div>
 </body>
