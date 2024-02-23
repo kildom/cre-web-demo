@@ -1,0 +1,50 @@
+{
+  "name": "cre-web-demo",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Convenient Regular Expressions Demo",
+  "main": "src/index.tsx",
+  "scripts": {
+    "_lic": "npx license-checker --json --out temp/licenses.json && npx ts-node --swc scripts/gen-licenses.ts temp/licenses.json",
+    "build": "node scripts/build-web.js",
+    "postbuild": "npm run _lic -- dist/license.html temp/web-main.json temp/web-monaco.json temp/web-worker.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kildom/cre-web-demo.git"
+  },
+  "keywords": [
+    "regex"
+  ],
+  "author": "Dominik Kilian",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/kildom/cre-web-demo/issues"
+  },
+  "homepage": "https://github.com/kildom/cre-web-demo#readme",
+  "dependencies": {
+    "@blueprintjs/core": "^5.9.1",
+    "@blueprintjs/icons": "^5.7.1",
+    "monaco-editor": "^0.46.0",
+    "normalize.css": "^8.0.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dropzone": "^14.2.3"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.4.2",
+    "@types/node": "^20.11.20",
+    "@types/react": "^18.2.58",
+    "@types/react-dom": "^18.2.19",
+    "@types/react-router": "^5.1.20",
+    "@typescript-eslint/eslint-plugin": "^7.0.2",
+    "@typescript-eslint/parser": "^7.0.2",
+    "esbuild": "^0.20.1",
+    "esbuild-copy-static-files": "^0.1.0",
+    "eslint": "^8.56.0",
+    "http-server": "^14.1.1",
+    "license-checker": "^25.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
