@@ -24,7 +24,7 @@ build({
 }, false, 'temp/web-monaco.json');
 
 build({
-    entryPoints: ['src/worker.ts'],
+    entryPoints: ['temp/worker.js'],
     bundle: true,
     sourcemap: true,
     minify: true,
@@ -34,7 +34,7 @@ build({
 }, false, 'temp/web-worker.json');
 
 build({
-    entryPoints: ['src/index.tsx'],
+    entryPoints: ['temp/index.jsx'],
     bundle: true,
     sourcemap: true,
     minify: true,

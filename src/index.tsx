@@ -5,6 +5,7 @@ import * as monaco from 'monaco-editor';//esm/vs/editor/editor.main.js';
 import { Alignment, Button, ContextMenu, Icon, InputGroup, Menu, MenuDivider, MenuItem, Navbar, Popover, Spinner, Tab, TabId, Tabs } from '@blueprintjs/core';
 import React, { useCallback } from 'react';
 import ReactDOM from 'react-dom';
+import * as db from './db.js';
 
 import 'normalize.css/normalize.css';
 import '@blueprintjs/core/lib/css/blueprint.css';
@@ -291,7 +292,7 @@ function newFile(ext: string) {
             dirty: true,
         }
     }
-    setState({ ...state, files: [...state.files, file]});
+    setState({ ...state, files: [...state.files, file] });
     tabSelected(file.id, state.selectedFileId);
     dbSynchronizeRequest();
 }
@@ -389,8 +390,6 @@ const extensions: { [key: string]: string } = {
 };
 let editor: monaco.editor.IStandaloneCodeEditor;
 
-let db: IDBDatabase;
-
 interface ExternalPromiseResult<T> {
     promise: Promise<T>;
     resolve: (value: T) => void;
@@ -419,33 +418,6 @@ function externalPromise<T = void>(): ExternalPromiseResult<T> {
     return result;
 }
 
-function requestToPromise<T = void>(req: IDBRequest<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(new Error('IndexedDB Request Failed'));
-    });
-}
-
-class AbortedError extends Error { }
-
-function transactionCommit(transaction: IDBTransaction): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        transaction.onerror = () => reject(new Error('Transaction error!'));
-        transaction.onabort = () => reject(new AbortedError('Transaction aborted!'));
-        transaction.oncomplete = () => resolve();
-        transaction.commit();
-    });
-}
-
-function transactionAbort(transaction: IDBTransaction): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        transaction.onerror = () => reject(new Error('Transaction error!'));
-        transaction.onabort = () => resolve();
-        transaction.oncomplete = () => resolve();
-        transaction.abort();
-    });
-}
-
 function delay(time: number): Promise<void> {
     return new Promise(r => setTimeout(r, time));
 }
@@ -468,41 +440,34 @@ function generateFileId(state?: State) {
     return id;
 }
 
+let database: db.Database;
+
+async function createDatabaseStructure(database: db.Database) {
+    try {
+        database.deleteObjectStore('files');
+    } catch (err) { }
+    try {
+        database.deleteObjectStore('recent');
+    } catch (err) { }
+    let files = database.createObjectStore<DBEntry>('files', { keyPath: 'id' });
+    database.createObjectStore('recent');
+    await files.put({
+        id: generateFileId(),
+        name: INITIAL_FILE,
+        content: INITIAL_CONTENT,
+    });
+    await files.put({
+        id: 'version',
+        version: -1,
+    });
+}
+
 async function openStorage() {
-    const INDEXED_DB_VERSION = 13;
-    let openReq = indexedDB.open('cre-web-demo-storage', INDEXED_DB_VERSION);
-    let ep = externalPromise();
-    openReq.onerror = () => ep.reject(new Error('Open persistent storage failed!'));
-    openReq.onblocked = () => ep.reject(new Error('Open persistent storage failed!'));
-    openReq.onsuccess = () => ep.resolve();
-    openReq.onupgradeneeded = async () => {
-        try {
-            try {
-                openReq.result.deleteObjectStore('files');
-                openReq.result.deleteObjectStore('recent');
-            } catch (err) { }
-            let files = openReq.result.createObjectStore('files', { keyPath: 'id' });
-            openReq.result.createObjectStore('recent');
-            files.put({
-                id: generateFileId(),
-                name: INITIAL_FILE,
-                content: INITIAL_CONTENT,
-            });
-            files.put({
-                id: 'version',
-                version: -1,
-            });
-            await transactionCommit(openReq.transaction as IDBTransaction);
-            ep.resolve();
-        } catch (err) {
-            ep.reject(err);
-        }
-    }
-    await ep.promise;
-    db = openReq.result;
-    let transaction = db.transaction('files', 'readonly');
-    let files = transaction.objectStore('files');
-    let list = await requestToPromise(files.getAll()) as DBEntry[];
+    const INDEXED_DB_VERSION = 18;
+    database = await db.open('cre-web-demo-storage', INDEXED_DB_VERSION, createDatabaseStructure, 1000);
+    await using transaction = database.transaction('files', 'readonly');
+    let files = transaction.objectStore<DBEntry>('files');
+    let list = await files.getAll();
     let stateFiles: FileState[] = [];
     for (let entry of list) {
         if ('version' in entry) {
@@ -529,19 +494,18 @@ async function openStorage() {
 
 async function loadStorageChanges() {
     let state = getState();
-    let transaction = db.transaction('files', 'readonly');
-    let store = transaction.objectStore('files');
-    let versionObject = await requestToPromise(store.get('version')) as DBVersion;
-    let version = versionObject?.version || -1;
+    await using transaction = database.transaction('files', 'readonly');
+    let store = transaction.objectStore<DBEntry>('files');
+    let versionObject = await store.get('version');
+    let version = versionObject?.id === 'version' ? versionObject?.version || -1 : -1;
     if (version === state.mutable.storageVersion) {
-        await transactionAbort(transaction);
         return;
     }
     for (let file of state.files) {
         if (file.mutable.dirty) continue;
-        let row = (await requestToPromise(store.get(file.id))) as (DBFile | undefined);
+        let row = await store.get(file.id);
         state = getState();
-        if (!row) continue;
+        if (!row || row.id === 'version') continue;
         let fileContent = file.mutable.content;
         if (typeof fileContent !== 'string') {
             fileContent = fileContent.getValue();
@@ -557,10 +521,9 @@ async function loadStorageChanges() {
         if (row.name !== file.name) {
             state = getState();
             console.log('Recv Name', row.name, '=>', file.name);
-            setState({ ...state, files: state.files.map(f => f.id !== file.id ? f : { ...f, name: row!.name }) });
+            setState({ ...state, files: state.files.map(f => f.id !== file.id ? f : { ...f, name: (row as DBFile).name }) });
         }
     }
-    await transactionCommit(transaction);
     state.mutable.storageVersion = version;
 }
 
@@ -582,38 +545,31 @@ async function storeStorageChanges() {
     }
     if (closedIds.length > 0 || rows.length > 0) {
         let changes = 0;
-        let transaction = db.transaction('files', 'readwrite');
-        try {
-            let storage = transaction.objectStore('files');
-            for (let id of closedIds) {
-                let old = await requestToPromise(storage.get(id));
-                if (old) {
-                    changes++;
-                    await requestToPromise(storage.delete(id));
-                }
+        await using transaction = database.transaction('files', 'readwrite');
+        let storage = transaction.objectStore<DBEntry>('files');
+        for (let id of closedIds) {
+            let old = await storage.get(id);
+            if (old) {
+                changes++;
+                await storage.delete(id);
             }
-            for (let row of rows) {
-                let old = await requestToPromise(storage.get(row.id)) as (DBFile | undefined);
-                if (!old || old.content !== row.content || old.name !== row.name) {
-                    changes++;
-                    await requestToPromise(storage.put(row));
-                }
+        }
+        for (let row of rows) {
+            let old = await storage.get(row.id);
+            if (!old || old.id === "version" || old.content !== row.content || old.name !== row.name) {
+                changes++;
+                await storage.put(row);
             }
-            if (changes) {
-                console.log('Changes', changes);
-                let versionChange: DBVersion = {
-                    id: 'version',
-                    version: generateFileId(),
-                }
-                await requestToPromise(storage.put(versionChange));
-                await transactionCommit(transaction);
-                state.mutable.storageVersion = versionChange.version;
-            } else {
-                await transactionAbort(transaction);
+        }
+        if (changes) {
+            //console.log('Changes', changes);
+            let versionChange: DBVersion = {
+                id: 'version',
+                version: generateFileId(),
             }
-        } catch (error) {
-            await transactionAbort(transaction);
-            throw error;
+            await storage.put(versionChange);
+            await transaction.commit();
+            state.mutable.storageVersion = versionChange.version;
         }
     }
 }
@@ -664,7 +620,45 @@ function editorValueChange() {
     dbSynchronizeRequest();
 }
 
+function test() {
+    let res = indexedDB.open('aa', 12);
+    res.onerror = () => console.log(res.error);
+    res.onblocked = () => console.log('Blocked', res.error);
+    res.onsuccess = () => console.log('Success111');
+    res.onupgradeneeded = async (event) => {
+        console.log('Upgradeneeded', event.oldVersion, event.newVersion);
+        //setTimeout(() => {
+        console.log('Upgradeneeded continue');
+        let db = res.result;
+        let transaction = res.transaction as IDBTransaction;
+        db.deleteObjectStore('jest');
+        let store = db.createObjectStore('jest', { keyPath: 'id' });
+        let res2 = store.put({ id: 1, value: 'first' });
+        let resolve: any;
+        let reject: any;
+        let p = new Promise((a, b) => { resolve = a; reject = b; });
+        res2.onerror = () => reject(res2.error);
+        res2.onsuccess = () => resolve();
+        await p;
+        console.log('Success1');
+        let res3 = store.put({ id: 1, value: 'first' });
+        res3.onerror = () => console.log('put2:', res3.error);
+        res3.onsuccess = () => {
+            console.log('Success2');
+            //transaction.commit();
+        }
+        let res4 = store.get(1);
+        res4.onerror = () => console.log('put2:', res4.error);
+        res4.onsuccess = () => {
+            console.log('Success3', res4.result);
+            //transaction.commit();
+        }
+        //}, 1000);
+    };
+}
+
 window.onload = async () => {
+    //test();
     await openStorage(); // TODO: handle errors to allow other stuff even when storage does not work properly
     // TODO: initialization: read data from storage, read source from URL
     let mainPanel = document.querySelector('.editorPanel') as HTMLElement;
@@ -682,3 +676,4 @@ window.onload = async () => {
     restoreEditorFile();
     dbSynchronizeRequest();
 };
+

@@ -4,10 +4,13 @@
   "version": "0.0.1",
   "description": "Convenient Regular Expressions Demo",
   "main": "src/index.tsx",
+  "type": "module",
   "scripts": {
-    "_lic": "npx license-checker --json --out temp/licenses.json && npx ts-node --swc scripts/gen-licenses.ts temp/licenses.json",
-    "build": "node scripts/build-web.js",
-    "postbuild": "npm run _lic -- dist/license.html temp/web-main.json temp/web-monaco.json temp/web-worker.json"
+    "_lic": "npx license-checker --json --out temp/licenses.json && npx tsx scripts/gen-licenses.ts temp/licenses.json",
+    "prebuild": "npx tsc --jsx preserve --module nodenext --target es2020 --allowSyntheticDefaultImports --outdir temp --inlineSourceMap --inlineSources src/*.ts src/*.tsx",
+    "build": "node scripts/build-web.cjs",
+    "postbuild": "npm run _lic -- dist/license.html temp/web-main.json temp/web-monaco.json temp/web-worker.json",
+    "serv": "concurrently \"npm run build s\" \"npm run prebuild -- --watch\""
   },
   "repository": {
     "type": "git",
@@ -39,12 +42,13 @@
     "@types/react-router": "^5.1.20",
     "@typescript-eslint/eslint-plugin": "^7.0.2",
     "@typescript-eslint/parser": "^7.0.2",
+    "concurrently": "^8.2.2",
     "esbuild": "^0.20.1",
     "esbuild-copy-static-files": "^0.1.0",
     "eslint": "^8.56.0",
     "http-server": "^14.1.1",
     "license-checker": "^25.0.1",
-    "ts-node": "^10.9.2",
+    "tsx": "^4.7.1",
     "typescript": "^5.3.3"
   }
 }
