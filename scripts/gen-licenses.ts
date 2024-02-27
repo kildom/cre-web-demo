@@ -1,5 +1,9 @@
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {LICENSES} from './additional-licenses';
+
+const DEBUG = false;
 
 const thisModuleName = 'cre-web-demo';
 
@@ -79,9 +83,20 @@ if (!licenseCheckerFile || !buildMetaFiles.length || !outputFile) {
 }
 
 let licenseChecker = JSON.parse(fs.readFileSync(licenseCheckerFile, 'utf-8')) as LicenseChecker;
+
+if (DEBUG) {
+    console.log('license-checker modules:');
+    console.log(Object.keys(licenseChecker).join('\n'));
+}
+
 let buildMeta: Metafile = { inputs: {}, outputs: {} };
 for (let buildMetaFile of buildMetaFiles) {
     let m = JSON.parse(fs.readFileSync(buildMetaFile, 'utf-8')) as Metafile;
+    if (DEBUG) {
+        console.log(`${buildMetaFile} build inputs:`);
+        let all = new Set([].concat(...Object.values(m.outputs).map(o => Object.keys(o.inputs)) as any));
+        console.log([...all].join('\n'));
+    }
     buildMeta.inputs = {...buildMeta.inputs, ...m.inputs};
     buildMeta.outputs = {...buildMeta.outputs, ...m.outputs};
 }
@@ -103,12 +118,25 @@ for (let info of Object.values(licenseChecker)) {
     }
 }
 
+licenseChecker = Object.fromEntries(Object.entries(licenseChecker).sort((a, b) => b[1].realPath.length - a[1].realPath.length));
+
+if (DEBUG) {
+    console.log('license-checker paths:');
+    console.log(Object.values(licenseChecker).map(info => `${info.moduleName} => ${info.realPath}`).join('\n'));
+}
+
 let allInputs = new Set<string>();
 
 for (let output of Object.values(buildMeta.outputs)) {
     for (let file of Object.keys(output.inputs)) {
         allInputs.add(file);
     }
+}
+
+if (DEBUG) {
+    console.log('all inputs:');
+    console.log([...allInputs].join('\n'));
+    console.log('assignments:');
 }
 
 outher_loop:
@@ -121,6 +149,7 @@ for (let file of allInputs) {
     for (let info of Object.values(licenseChecker)) {
         if (realPath.startsWith(info.realPath)) {
             assign(info, file);
+            if (DEBUG) console.log(`${realPath} => ${info.moduleName}`);
             continue outher_loop;
         }
     }
@@ -130,10 +159,12 @@ for (let file of allInputs) {
 
 resolved.sort((a, b) => b.priority - a.priority);
 
+resolved.push(...LICENSES as LicenseResolved[]);
+
 let text = '';
 
 for (let info of resolved) {
-    text += '\n===============================================================================\n';
+    text += '\n===============================================================================\n\n';
     text += `Module:     ${[...info.modules].join(', ')}\n`;
     text += `License:    ${info.licenses}\n`;
     if (info.publisher && info.email)
@@ -146,14 +177,16 @@ for (let info of resolved) {
         text += `Repository: ${info.repository}\n`;
     if (info.url)
         text += `URL:        ${info.url}\n`;
-    text += `License text:\n${info.licenseText}\n`;
+    text += `License text:\n${info.licenseText.trimEnd()}\n`;
 }
 
-if (!outputFile.toLocaleLowerCase().endsWith('.txt')) {
+if (!outputFile.toLowerCase().endsWith('.txt')) {
+    let cssName = path.basename(outputFile.substring(0, outputFile.length - path.extname(outputFile).length)) + '.css';
     text = `
-    <html><body><pre>
-    ${
-    text.replace(/&/g, '&amp;')
+    <html><link rel="stylesheet" href="${cssName}" /><body><pre>${
+    text
+        .trim()
+        .replace(/&/g, '&amp;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;')
         .replace(/</g, '&lt;')

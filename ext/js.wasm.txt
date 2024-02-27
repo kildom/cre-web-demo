@@ -1,0 +1,4 @@
+
+The 'js.wasm' file is WASM binary executable compiled from SpiderMonkey stand-alone shell.
+
+See https://spidermonkey.dev/ for more details.

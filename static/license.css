@@ -1,0 +1,11 @@
+
+body {
+    background-color: #252627;
+    color: #CCC;
+    font-size: 11px;
+    padding: 20px;
+}
+
+pre {
+    text-wrap: wrap;
+}

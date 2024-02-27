@@ -2,11 +2,12 @@
 
 import * as monaco from 'monaco-editor';//esm/vs/editor/editor.main.js';
 
-import { Alignment, Button, ContextMenu, Icon, InputGroup, Intent, Menu, MenuDivider, MenuItem, Navbar, OverlayToaster, Popover, Spinner, Tab, TabId, Tabs, Toaster } from '@blueprintjs/core';
+import { Alignment, Button, ContextMenu, Dialog, DialogBody, DialogFooter, Icon, InputGroup, Intent, Menu, MenuDivider, MenuItem, Navbar, OverlayToaster, Popover, Spinner, Tab, TabId, Tabs, Toaster } from '@blueprintjs/core';
 import React, { useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import * as db from './db.js';
-import { CompressMessage, CompressResponse, WorkerMessage, WorkerResponse } from './shared.js';
+import { CompressMessage, CompressResponse, ExecuteProgress, ExecuteResponse, RunStatus, WorkerMessage, WorkerProgress, WorkerResponse } from './shared.js';
+import { cre } from 'con-reg-exp';
 
 
 import 'normalize.css/normalize.css';
@@ -34,12 +35,18 @@ interface RecentFile {
     time: number;
 }
 
+enum DialogType {
+    NONE,
+    ABOUT,
+    LICENSE,
+}
+
 interface State {
     readonly selectedFileId: number;
     readonly files: FileState[];
     readonly renaming: boolean;
     readonly status: string;
-    readonly progress: boolean;
+    readonly showDialog: DialogType;
     readonly recent: RecentFile[];
     readonly mutable: {
         storageVersion: number;
@@ -73,12 +80,12 @@ monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
 });
 
-let initialState: State = { // TODO: try to load from storage first
+let initialState: State = {
     selectedFileId: 0,
     files: [],
     renaming: false,
     status: '',
-    progress: false,
+    showDialog: DialogType.NONE,
     recent: [
         {
             name: 'Untitled-123.js',
@@ -222,7 +229,7 @@ function renameStart(file: FileState) {
     }, 100);
 }
 
-function renameUpdate(file: FileState, text: string) { // TODO: remove file parameter
+function renameUpdate(text: string) {
     let state = getState();
     setState({ ...state, files: state.files.map(file => file.id !== state.selectedFileId ? file : { ...file, name: text }) });
 }
@@ -236,7 +243,7 @@ function renameDone() {
         name = 'Untitled';
     }
     if (name !== file.name) {
-        renameUpdate(file, name);
+        renameUpdate(name);
     }
     let language = languageFromName(name);
     if (typeof file.mutable.content !== 'string' && language !== file.mutable.content.getLanguageId()) {
@@ -303,35 +310,58 @@ async function fromBase64(data: string): Promise<Uint8Array> {
 }
 
 let worker = new Worker('./worker.js', { name: 'Executor-Compiler-Compressor' });
-let workerWaitingPromises: { mid: number, resolve: (value: WorkerResponse | PromiseLike<WorkerResponse>) => void, reject: (reason: any) => void }[] = [];
+worker.onmessage = workerOnmessage;
+let workerWaitingPromises: {
+    mid: number,
+    resolve: (value: WorkerResponse | PromiseLike<WorkerResponse>) => void,
+    reject: (reason: any) => void,
+    progress?: (msg: WorkerProgress) => void
+}[] = [];
 let workerLastMessageId = 0;
 let encoder = new TextEncoder();
 let decoder = new TextDecoder();
 
-async function sendWithResponse<T>(message: WorkerMessage): Promise<T> {
+function killWorker() {
+    worker.terminate();
+    worker = new Worker('./worker.js', { name: 'Executor-Compiler-Compressor' });
+    worker.onmessage = workerOnmessage;
+    let arr = workerWaitingPromises;
+    workerWaitingPromises = [];
+    for (let item of arr) {
+        item.reject(new WorkerBlockedError('Worker execution timeout reached'));
+    }
+}
+
+async function sendWithResponse<T>(message: WorkerMessage, progress?: (msg: WorkerProgress) => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
         let mid = ++workerLastMessageId
         message.mid = mid;
-        workerWaitingPromises.push({ mid, resolve: resolve as any, reject });
+        workerWaitingPromises.push({ mid, resolve: resolve as any, reject, progress });
         worker.postMessage(message);
     });
 }
 
-function workerAsyncResponse(message: WorkerResponse) {
-
+function workerAsyncResponse(message: WorkerResponse | WorkerProgress) {
+    console.warn('Unknown', message);
 }
 
-worker.onmessage = (event) => {
-    let response = event.data as WorkerResponse;
-    let index = workerWaitingPromises.findIndex(entry => entry.mid === response.mid);
+function workerOnmessage(event) {
+    let response = event.data as WorkerResponse | WorkerProgress;
+    let isProgress = response.mid < 0;
+    let mid = Math.abs(response.mid);
+    let index = workerWaitingPromises.findIndex(entry => entry.mid === mid);
     if (index < 0) {
         workerAsyncResponse(response);
     } else {
-        let promiseInfo = workerWaitingPromises.splice(index, 1)[0];
         if (response.type === 'error') {
+            let promiseInfo = workerWaitingPromises.splice(index, 1)[0];
             promiseInfo.reject(new Error(response.message));
+        } else if (isProgress) {
+            let promiseInfo = workerWaitingPromises[index];
+            promiseInfo.progress?.(response as WorkerProgress);
         } else {
-            promiseInfo.resolve(response);
+            let promiseInfo = workerWaitingPromises.splice(index, 1)[0];
+            promiseInfo.resolve(response as WorkerResponse);
         }
     }
 };
@@ -366,8 +396,96 @@ async function updateAddress(stateParam?: State) {
         } else {
             throw err;
         }
+    } finally {
+        runScript();
     }
 }
+
+let pendingRun = false;
+let runningPromise: Promise<ExecuteResponse> | undefined = undefined;
+
+
+let killTimeout = setTimeout(() => { }, 0);
+
+function setKillTimeout(timeout: number) {
+    clearTimeout(killTimeout);
+    killTimeout = setTimeout(() => {
+        killWorker();
+    }, timeout);
+}
+
+function stopKillTimeout() {
+    clearTimeout(killTimeout);
+}
+
+function runningCallback(progress: ExecuteProgress) {
+    console.log(progress.status);
+    switch (progress.status) {
+        case RunStatus.DOWNLOADING:
+            setKillTimeout(30000);
+            showOutput(['Downloading modules...']);
+            break;
+        case RunStatus.COMPILING:
+            setKillTimeout(3000);
+            showOutput(['Compiling TypeScript...']);
+            break;
+        case RunStatus.LOADING:
+            setKillTimeout(1000);
+            showOutput(['Loading script...']);
+            break;
+        case RunStatus.RUNNING:
+            setKillTimeout(5000);
+            showOutput(['Running script...']);
+            break;
+    }
+}
+
+async function runScript() {
+    while (!curState) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+    if (pendingRun) return;
+    while (runningPromise) {
+        pendingRun = true;
+        try {
+            await runningPromise;
+        } catch (err) { }
+        pendingRun = false;
+    }
+    let state = getState();
+    let file = state.files.find(file => file.id === state.selectedFileId) as FileState;
+    let content = getFileContent(file);
+    try {
+        runningPromise = sendWithResponse<ExecuteResponse>({
+            type: 'execute',
+            name: file.name,
+            typescript: languageFromName(file.name) === 'typescript',
+            code: content,
+        }, runningCallback);
+        try {
+            setKillTimeout(5000);
+            let response = await runningPromise;
+            if (response.compileMessages.length) {
+                showOutput(['', response.compileMessages, ...response.stdio], response.fileName);
+            } else {
+                showOutput(response.stdio, response.fileName);
+            }
+        } catch (err) {
+            if (err instanceof WorkerBlockedError) {
+                showOutput(['', 'Execution takes too long. Terminated!']);
+            } else {
+                throw err;
+            }
+        } finally {
+            stopKillTimeout();
+        }
+    } catch (e) {
+        showOutput(['', 'Unexpected error: ' + e.message]);
+    } finally {
+        runningPromise = undefined;
+    }
+}
+
 
 function getFileContent(file: FileState): string {
     return typeof (file.mutable.content) === 'string' ? file.mutable.content : file.mutable.content.getValue();
@@ -530,8 +648,9 @@ function App() {
                         <Button minimal={true} icon="share" text="Share" onClick={copyAddress} />
                         <Button minimal={true} icon="download" text="Download" />
                         <Navbar.Divider />
-                        {/*<Spinner size={20} />*/}
-                        <Navbar.Heading><span style={{ fontSize: '90%' }}>  Running...</span></Navbar.Heading>
+                    </Navbar.Group>
+                    <Navbar.Group align={Alignment.RIGHT}>
+                        <Button minimal={true} icon="help" text="About" onClick={() => setState({ ...state, showDialog: DialogType.ABOUT })} />
                     </Navbar.Group>
                 </Navbar>
             </div>
@@ -540,7 +659,7 @@ function App() {
                     onChange={tabSelected}>
                     {state.files.map(file =>
                         (state.renaming && file.id === state.selectedFileId) ? (
-                            <InputGroup onKeyUp={key => key.key === 'Enter' || key.key === 'Escape' ? renameDone() : null} inputClassName='file-name-input' style={{ width: `calc(25px + ${file.name.length}ch)` }} large={true} autoFocus={true} value={file.name} onValueChange={text => renameUpdate(file, text)} onBlur={() => renameDone()} />
+                            <InputGroup onKeyUp={key => key.key === 'Enter' || key.key === 'Escape' ? renameDone() : null} inputClassName='file-name-input' style={{ width: `calc(25px + ${file.name.length}ch)` }} large={true} autoFocus={true} value={file.name} onValueChange={text => renameUpdate(text)} onBlur={() => renameDone()} />
                         ) : (
                             <Tab id={file.id} onMouseUp={() => renameStart(file)}>  {file.name} {state.files.length > 1 ? (
                                 <Icon icon="small-cross" className='close-icon' onClick={() => fileClosed(file.id)} />
@@ -548,6 +667,35 @@ function App() {
                         ))}
                 </Tabs>
             </div>
+            <Dialog title="About Convenient Regular Expressions" icon="help" isOpen={state.showDialog === DialogType.ABOUT} onClose={() => setState({ ...state, showDialog: DialogType.NONE })}>
+                <DialogBody>
+                    <p>The <b><i>Convenient Regular Expressions</i></b> give a different approach to a regular expressions syntax. The main goal is to provide a syntax that is more manageable in complex regular expressions. It looks more like actual program source code with clearly visible structure, comments, and meaning.</p>
+                    <p>See the following pages to learn more:</p>
+                    <ul>
+                        <li><a href="https://kildom.github.io/con-reg-exp/" target="_blank">Website</a></li>
+                        <li><a href="https://kildom.github.io/con-reg-exp/tutorial.html" target="_blank">Tutorial</a></li>
+                        <li><a href="https://kildom.github.io/con-reg-exp/docs.html" target="_blank">Documentation</a></li>
+                        <li><a href="https://kildom.github.io/con-reg-exp/cheat-sheet.html" target="_blank">Cheat Sheet</a></li>
+                        <li><a href="https://github.com/kildom/con-reg-exp/" target="_blank">GitHub repository</a></li>
+                    </ul>
+                </DialogBody>
+                <DialogFooter actions={<>
+                    <Button text="License information" onClick={() => setState({ ...state, showDialog: DialogType.LICENSE })} />
+                    <Button intent="primary" text="  Close  " onClick={() => setState({ ...state, showDialog: DialogType.NONE })} />
+                </>
+                } />
+            </Dialog>
+            <Dialog title="License Information" icon="info-sign" isOpen={state.showDialog === DialogType.LICENSE} onClose={() => setState({ ...state, showDialog: DialogType.NONE })} style={{maxWidth: 'calc(100vw - 40px)', width: '900px'}}>
+                <DialogBody>
+                    <p>The <b><i>Convenient Regular Expressions</i></b> are published under the MIT license, see details below.</p>
+                    <p>This site is additionally using a software that is covered by the following licenses:</p>
+                    <iframe src="license.html" style={{maxHeight: 'calc(100vh - 400px)', width: '100%', height: '600px', border: '1px solid #777' }}></iframe>
+                </DialogBody>
+                <DialogFooter actions={<>
+                    <Button intent="primary" text="  Close  " onClick={() => setState({ ...state, showDialog: DialogType.NONE })} />
+                </>
+                } />
+            </Dialog>
         </>
     );
 }
@@ -841,7 +989,6 @@ window.onload = async () => {
     mainToaster = await OverlayToaster.createAsync({ position: 'top' });
     //test();
     await openStorage(); // TODO: handle errors to allow other stuff even when storage does not work properly
-    // TODO: initialization: read data from storage, read source from URL
     await readFromHash();
     showIntroIfNeeded();
     let mainPanel = document.querySelector('.editorPanel') as HTMLElement;
@@ -861,3 +1008,54 @@ window.onload = async () => {
     updateAddress();
 };
 
+
+function escapeHTML(str: string): string {
+    const chars = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    };
+    return str.replace(/[&<>"']/g, x => chars[x]);
+}
+
+function showOutput(stdio: string[], fileName?: string) {
+    let fileRegExp: RegExp | undefined = fileName ? cre.global`
+            "${fileName}";
+            ":";
+            lineNumber: at-least-1 [0-9];
+            optional {
+                ":";
+                columnNumber: at-least-1 [0-9];
+            }
+        ` : undefined;
+    let container = document.getElementById('outputText') as HTMLElement;
+    container.innerHTML = '';
+    let html = '';
+    for (let i = 0; i < stdio.length; i++) {
+        html += `<span class="std${i & 1 ? 'err' : 'out'}">`;
+        let text = escapeHTML(stdio[i]).replace(/\r?\n/g, `</span></div><div><span class="std${i & 1 ? 'err' : 'out'}">`);
+        if (fileRegExp) {
+            text = text.replace(fileRegExp, (all: string, line: string, column: string) => {
+                return `<a href="javascript://${all}" data-line="${line}" data-column="${column}">${all}</a>`;
+            });
+        }
+        html += text;
+        html += `</span>`;
+    }
+    container.innerHTML = '<div>' + html + '</div>';
+    for (let link of container.querySelectorAll('a')) {
+        let line = link.getAttribute('data-line');
+        let column = link.getAttribute('data-column');
+        if (!line) continue;
+        link.onclick = () => {
+            goToLine(parseInt(line as string), column ? parseInt(column) : 1);
+        }
+    }
+}
+
+function goToLine(line: number, column: number) {
+    editor.setSelection(new monaco.Range(line, column, line, column));
+    editor.focus();
+}
