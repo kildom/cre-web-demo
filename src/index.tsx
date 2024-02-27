@@ -2,10 +2,12 @@
 
 import * as monaco from 'monaco-editor';//esm/vs/editor/editor.main.js';
 
-import { Alignment, Button, ContextMenu, Icon, InputGroup, Menu, MenuDivider, MenuItem, Navbar, Popover, Spinner, Tab, TabId, Tabs } from '@blueprintjs/core';
+import { Alignment, Button, ContextMenu, Icon, InputGroup, Intent, Menu, MenuDivider, MenuItem, Navbar, OverlayToaster, Popover, Spinner, Tab, TabId, Tabs, Toaster } from '@blueprintjs/core';
 import React, { useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import * as db from './db.js';
+import { CompressMessage, CompressResponse, WorkerMessage, WorkerResponse } from './shared.js';
+
 
 import 'normalize.css/normalize.css';
 import '@blueprintjs/core/lib/css/blueprint.css';
@@ -73,32 +75,7 @@ monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
 
 let initialState: State = { // TODO: try to load from storage first
     selectedFileId: 0,
-    files: [
-        {
-            id: 0,
-            name: 'Untitled-1.js',
-            mutable: {
-                content: '\nlet x;// TODO: put some intro here\n',
-                dirty: false,
-            }
-        },
-        {
-            id: 1,
-            name: 'Untitled-12.ts',
-            mutable: {
-                content: '\nlet x: Set<string>;// TODO: put some intro here\n',
-                dirty: false,
-            }
-        },
-        {
-            id: 2,
-            name: 'Untitled-123.ts',
-            mutable: {
-                content: '\nlet x: Set<string>;// TODO: put some intro here\n',
-                dirty: false,
-            }
-        },
-    ],
+    files: [],
     renaming: false,
     status: '',
     progress: false,
@@ -175,6 +152,7 @@ async function fileClosed(id: number) {
     restoreEditorFile();
     renameDone();
     dbSynchronizeRequest();
+    updateAddress();
 }
 
 function languageFromName(name: string): string {
@@ -266,6 +244,7 @@ function renameDone() {
     }
     file.mutable.dirty = true;
     dbSynchronizeRequest();
+    updateAddress();
 }
 
 const NEW_FILE_TEMPLATE = `
@@ -295,8 +274,202 @@ function newFile(ext: string) {
     setState({ ...state, files: [...state.files, file] });
     tabSelected(file.id, state.selectedFileId);
     dbSynchronizeRequest();
+    updateAddress();
 }
 
+async function toDataURL(data, type) {
+    return await new Promise(r => {
+        const reader = new FileReader();
+        reader.onload = () => r(reader.result);
+        reader.readAsDataURL(new File([data], 'file', { type }));
+    });
+}
+
+function toBase64(data: Uint8Array): Promise<string> {
+    return new Promise<string>(r => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            let url = reader.result as string;
+            let pos = url.indexOf('base64,') + 7;
+            r(url.substring(pos));
+        };
+        reader.readAsDataURL(new Blob([data]));
+    });
+}
+
+async function fromBase64(data: string): Promise<Uint8Array> {
+    const res = await fetch('data:application/octet-stream;base64,' + data);
+    return new Uint8Array(await res.arrayBuffer());
+}
+
+let worker = new Worker('./worker.js', { name: 'Executor-Compiler-Compressor' });
+let workerWaitingPromises: { mid: number, resolve: (value: WorkerResponse | PromiseLike<WorkerResponse>) => void, reject: (reason: any) => void }[] = [];
+let workerLastMessageId = 0;
+let encoder = new TextEncoder();
+let decoder = new TextDecoder();
+
+async function sendWithResponse<T>(message: WorkerMessage): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        let mid = ++workerLastMessageId
+        message.mid = mid;
+        workerWaitingPromises.push({ mid, resolve: resolve as any, reject });
+        worker.postMessage(message);
+    });
+}
+
+function workerAsyncResponse(message: WorkerResponse) {
+
+}
+
+worker.onmessage = (event) => {
+    let response = event.data as WorkerResponse;
+    let index = workerWaitingPromises.findIndex(entry => entry.mid === response.mid);
+    if (index < 0) {
+        workerAsyncResponse(response);
+    } else {
+        let promiseInfo = workerWaitingPromises.splice(index, 1)[0];
+        if (response.type === 'error') {
+            promiseInfo.reject(new Error(response.message));
+        } else {
+            promiseInfo.resolve(response);
+        }
+    }
+};
+
+class WorkerBlockedError extends Error { }
+
+let currentAddressKey = '';
+let currentAddressHash = '';
+
+
+async function updateAddress(stateParam?: State) {
+    let state = stateParam || getState();
+    let file = state.files.find(file => file.id === state.selectedFileId);
+    if (!file) return;
+    let textData = file.name + '\0' + getFileContent(file);
+    if (textData === currentAddressKey) return;
+    currentAddressKey = textData;
+    let data = encoder.encode(textData);
+    try {
+        let response = await sendWithResponse<CompressResponse>({
+            type: 'compress',
+            input: data,
+            version: 1,
+        });
+        let hash = '#1' + await toBase64(response.output);
+        currentAddressHash = hash;
+        history.replaceState(null, '', hash);
+    } catch (err) {
+        currentAddressKey = '';
+        if (err instanceof WorkerBlockedError) {
+            setTimeout(() => updateAddress(), 100);
+        } else {
+            throw err;
+        }
+    }
+}
+
+function getFileContent(file: FileState): string {
+    return typeof (file.mutable.content) === 'string' ? file.mutable.content : file.mutable.content.getValue();
+}
+
+function openFileWithContent(name: string, content: string) {
+    let initial = !curState;
+    let state = initial ? initialState : getState();
+    let index = state.files.findIndex(file => getFileContent(file).trim() === content.trim());
+    let file: FileState;
+    if (index >= 0) {
+        file = state.files[index];
+    } else {
+        file = {
+            id: generateFileId(state),
+            name: name,
+            mutable: {
+                content: content,
+                dirty: true,
+            },
+        };
+        state = { ...state, files: state.files.concat([file]) };
+    }
+    if (initial) {
+        initialState = { ...state, selectedFileId: file.id };
+    } else {
+        setState(state);
+        tabSelected(file.id, 0);
+    }
+}
+
+async function readFromHash(): Promise<void> {
+    try {
+        let hash = location.hash;
+        if (hash === currentAddressHash) return;
+        currentAddressHash = hash;
+        if (hash.length < 3) return;
+        let version = hash.substring(1, 2);
+        if (version !== '1') throw new Error('Invalid format.');
+        let data = await fromBase64(hash.substring(2));
+        let response = await sendWithResponse<CompressResponse>({
+            type: 'decompress',
+            input: data,
+            version: parseInt(version),
+        });
+        let textData = decoder.decode(response.output);
+        let index = textData.indexOf('\0');
+        openFileWithContent(textData.substring(0, index), textData.substring(index + 1));
+    } catch (err) {
+        mainToaster.show({ message: (<>Cannot decode input URL.<br /><br />{`${err.message}`}</>), intent: Intent.DANGER, icon: 'error' });
+    }
+};
+
+
+onhashchange = () => {
+    readFromHash();
+    currentAddressKey = '';
+    updateAddress();
+};
+
+let mainToaster: Toaster;
+
+async function copyAddress() {
+    let addr = location.href;
+    let index = addr.indexOf('#');
+    if (index >= 0) {
+        addr = addr.substring(0, index);
+    }
+    addr += currentAddressHash;
+    let ok = false;
+    try {
+        let input = document.getElementById('clipboardWorkspace') as HTMLInputElement;
+        input.value = addr;
+        input.select();
+        document.execCommand('copy');
+        ok = true;
+    } catch (e) { }
+    try {
+        await navigator.clipboard.writeText(addr);
+        ok = true;
+    } catch (e) {
+        try {
+            await navigator.permissions.query({ name: 'clipboard-write' as any });
+            await navigator.clipboard.writeText(addr);
+            ok = true;
+        } catch (e) { }
+    }
+    if (ok) {
+        mainToaster.show({
+            message: (
+                <>Address copied to the clipboard.<br />
+                    You can paste it now anywhere to share the code.</>
+            ), intent: Intent.SUCCESS, icon: 'clipboard', timeout: 3000
+        });
+    } else {
+        mainToaster.show({
+            message: (
+                <>Cannot copy to clipboard.<br />Copy address bar manually.</>
+            ), intent: Intent.DANGER, icon: 'error', timeout: 15000
+        });
+    }
+}
 
 function App() {
     let arr = React.useState<State>({ ...initialState });
@@ -305,6 +478,7 @@ function App() {
     curState = state;
     tempState = undefined;
     //console.log(state);
+    updateAddress(state);
     return (
         <>
             <div className="bottons">
@@ -353,7 +527,7 @@ function App() {
                         }>
                             <Button minimal={true} icon="folder-open" text="Open" rightIcon="caret-down" />
                         </Popover>
-                        <Button minimal={true} icon="share" text="Share" />
+                        <Button minimal={true} icon="share" text="Share" onClick={copyAddress} />
                         <Button minimal={true} icon="download" text="Download" />
                         <Navbar.Divider />
                         {/*<Spinner size={20} />*/}
@@ -452,11 +626,6 @@ async function createDatabaseStructure(database: db.Database) {
     let files = database.createObjectStore<DBEntry>('files', { keyPath: 'id' });
     database.createObjectStore('recent');
     await files.put({
-        id: generateFileId(),
-        name: INITIAL_FILE,
-        content: INITIAL_CONTENT,
-    });
-    await files.put({
         id: 'version',
         version: -1,
     });
@@ -486,10 +655,6 @@ async function openStorage() {
     if (stateFiles.length > 0) {
         initialState = { ...initialState, files: stateFiles, selectedFileId: stateFiles[0].id };
     }
-    /*let inIntoState = initialState.files.length === 1
-        && initialState.files[0].name === INITIAL_FILE
-        && initialState.files[0].mutable.content === INITIAL_CONTENT;*/
-    // TODO: Load from URL and make it active
 }
 
 async function loadStorageChanges() {
@@ -618,6 +783,7 @@ function editorValueChange() {
     let file = state.files.find(file => file.id === state.selectedFileId);
     file!.mutable.dirty = true;
     dbSynchronizeRequest();
+    updateAddress();
 }
 
 function test() {
@@ -657,10 +823,27 @@ function test() {
     };
 }
 
+function showIntroIfNeeded() {
+    if (initialState.files.length === 0) {
+        initialState.files.push({
+            id: generateFileId(),
+            name: INITIAL_FILE,
+            mutable: {
+                content: INITIAL_CONTENT,
+                dirty: false,
+            },
+        });
+        initialState = { ...initialState, selectedFileId: initialState.files[0].id };
+    }
+}
+
 window.onload = async () => {
+    mainToaster = await OverlayToaster.createAsync({ position: 'top' });
     //test();
     await openStorage(); // TODO: handle errors to allow other stuff even when storage does not work properly
     // TODO: initialization: read data from storage, read source from URL
+    await readFromHash();
+    showIntroIfNeeded();
     let mainPanel = document.querySelector('.editorPanel') as HTMLElement;
     let panel = document.createElement('div');
     panel.className = 'editor';
@@ -675,5 +858,6 @@ window.onload = async () => {
     ReactDOM.render(<App />, document.getElementById('reactRoot'));
     restoreEditorFile();
     dbSynchronizeRequest();
+    updateAddress();
 };
 
