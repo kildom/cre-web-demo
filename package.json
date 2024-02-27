@@ -7,10 +7,11 @@
   "type": "module",
   "scripts": {
     "_lic": "npx license-checker --json --out temp/licenses.json && npx tsx scripts/gen-licenses.ts temp/licenses.json",
-    "prebuild": "npx tsc --jsx preserve --module nodenext --target es2020 --allowSyntheticDefaultImports --outdir temp --inlineSourceMap --inlineSources src/*.ts src/*.tsx",
+    "prebuild": "node scripts/wasm-pack.mjs && npx tsc --jsx preserve --module nodenext --target es2020 --allowSyntheticDefaultImports --esModuleInterop --outdir temp --inlineSourceMap --inlineSources src/*.ts src/*.tsx",
     "build": "node scripts/build-web.cjs",
     "postbuild": "npm run _lic -- dist/license.html temp/web-main.json temp/web-monaco.json temp/web-worker.json",
-    "serv": "concurrently \"npm run build s\" \"npm run prebuild -- --watch\""
+    "preserv": "npm run prebuild",
+    "serv": "concurrently \"node scripts/build-web.cjs s\" \"npm run prebuild -- --watch\""
   },
   "repository": {
     "type": "git",
@@ -26,8 +27,11 @@
   },
   "homepage": "https://github.com/kildom/cre-web-demo#readme",
   "dependencies": {
+    "con-reg-exp": "*",
     "@blueprintjs/core": "^5.9.1",
     "@blueprintjs/icons": "^5.7.1",
+    "@wasmer/wasi": "^0.12.0",
+    "@wasmer/wasmfs": "^0.12.0",
     "fflate": "^0.8.2",
     "monaco-editor": "^0.46.0",
     "normalize.css": "^8.0.1",
@@ -49,6 +53,7 @@
     "eslint": "^8.56.0",
     "http-server": "^14.1.1",
     "license-checker": "^25.0.1",
+    "lzma": "^2.3.2",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
   }

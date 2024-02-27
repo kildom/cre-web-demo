@@ -5,6 +5,11 @@
     <script>
         if (!Symbol.asyncDispose) Symbol.asyncDispose = Symbol('asyncDispose');
         if (!Symbol.dispose) Symbol.dispose = Symbol('dispose');
+        //Buffer = {};
+        window.global = window;
+        global = window;
+        globalThis.global = window;
+        //process = {};
     </script>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
@@ -34,10 +39,13 @@
             flex-direction: column;
             flex-wrap: nowrap;
             height: 100vh;
+            width: 100vw;
+            align-content: stretch;
+            align-items: stretch;
         }
 
         .toolbar {
-            flex: 0 1 auto;
+            flex: 1 0 0px;
             display: flex;
             flex-direction: column;
             flex-wrap: nowrap;
@@ -50,13 +58,14 @@
         }
 
         .workspace {
-            flex: 1 1 auto;
+            flex: 1 1 200vh;
             display: flex;
             flex-direction: row;
             flex-wrap: nowrap;
             justify-content: flex-start;
             align-content: stretch;
             align-items: stretch;
+            overflow: hidden;
         }
 
         .editorPanel {
@@ -66,6 +75,7 @@
             justify-content: flex-start;
             align-content: stretch;
             align-items: stretch;
+            width: 60vw;
         }
 
         .editor {
@@ -78,10 +88,6 @@
 
         .editorControl {
             position: absolute;
-        }
-
-        .outputPanel {
-            flex: 2 1 200px;
         }
 
         .menu-label {
@@ -110,6 +116,33 @@
             top: -9999px;
             left: -9999px;
         }
+
+        .outputPanel {
+            width: 40vw;
+            overflow: auto;
+            background-color: #1d1d1d;
+            color: #AAA;
+        }
+
+        .outputInner {
+        }
+
+        #outputText {
+            white-space: pre;
+            word-wrap: break-word;
+            text-wrap: wrap;
+            padding: 10px;
+            font-family: "Droid Sans Mono", monospace;
+            font-size: 14px;
+        }
+
+        #outputText>div {
+            margin: 0.4em 0px;
+        }
+
+        #outputText .stderr {
+            color: #b8564d;
+        }
     </style>
 </head>
 
@@ -119,7 +152,9 @@
         <div class="toolbar" id="reactRoot"></div>
         <div class="workspace">
             <div class="editorPanel"></div>
-            <div class="outputPanel">aaaaaaa</div>
+            <div class="outputPanel">
+                    <div id="outputText"></div>
+            </div>
         </div>
     </div>
 </body>

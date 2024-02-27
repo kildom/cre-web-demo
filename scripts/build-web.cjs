@@ -55,6 +55,10 @@ build({
             dereference: true,
             errorOnExist: false,
             recursive: true,
+        }),
+        copyStaticFiles({
+            src: 'node_modules/con-reg-exp/dist/esm/con-reg-exp.mjs',
+            dest: 'dist/con-reg-exp.mjs',
         })
     ],
 }, true, 'temp/web-main.json');
