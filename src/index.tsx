@@ -13,6 +13,7 @@ import { cre } from 'con-reg-exp';
 import 'normalize.css/normalize.css';
 import '@blueprintjs/core/lib/css/blueprint.css';
 import '@blueprintjs/icons/lib/css/blueprint-icons.css';
+import { setupEditor } from './extensions.js';
 
 
 const INITIAL_FILE = 'Intro.js';
@@ -986,6 +987,7 @@ function showIntroIfNeeded() {
 }
 
 window.onload = async () => {
+    setupEditor(monaco);
     mainToaster = await OverlayToaster.createAsync({ position: 'top' });
     //test();
     await openStorage(); // TODO: handle errors to allow other stuff even when storage does not work properly
@@ -999,6 +1001,7 @@ window.onload = async () => {
         automaticLayout: true,
         extraEditorClassName: 'editorControl',
         model: null,
+        "semanticHighlighting.enabled": true,
     });
     editor.onDidChangeModelContent(editorValueChange);
     mainPanel.appendChild(panel);
